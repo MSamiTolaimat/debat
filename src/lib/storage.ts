@@ -1,4 +1,4 @@
-import type { Session, Side } from "../types";
+import type { DebateReview, Session, Side } from "../types";
 
 const KEY = "debate.sessions.v2";
 
@@ -48,6 +48,8 @@ export interface Draft {
   sources?: string[];
   /** رقم نسخة بنك النصوص المستعملة في هذه الجلسة */
   variant?: number;
+  /** الكلمة الختامية للخصم بعد كلمة الطالب الأخيرة */
+  closing?: string;
 }
 
 const DRAFT_PREFIX = "debate.draft.v2:";
@@ -79,6 +81,46 @@ export function saveDraft(topicId: string, draft: Draft) {
 export function clearDraft(topicId: string) {
   try {
     localStorage.removeItem(DRAFT_PREFIX + topicId);
+  } catch {
+    /* تجاهل */
+  }
+}
+
+/** مواضيع لها مسودة فيها نص مكتوب (تدريب لم يكتمل) */
+export function topicsWithDraft(): string[] {
+  const out: string[] = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith(DRAFT_PREFIX)) continue;
+      const id = k.slice(DRAFT_PREFIX.length);
+      const d = loadDraft(id);
+      if (d && d.texts.some((t) => t.trim().length > 0)) out.push(id);
+    }
+  } catch {
+    /* تجاهل */
+  }
+  return out;
+}
+
+const REVIEW_KEY = "debate.reviews.v1";
+
+function loadReviews(): Record<string, DebateReview> {
+  try {
+    const raw = localStorage.getItem(REVIEW_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, DebateReview>) : {};
+  } catch {
+    return {};
+  }
+}
+
+export const loadReview = (teamId: string): DebateReview | undefined => loadReviews()[teamId];
+
+export function saveReview(teamId: string, review: DebateReview) {
+  const all = loadReviews();
+  all[teamId] = review;
+  try {
+    localStorage.setItem(REVIEW_KEY, JSON.stringify(all));
   } catch {
     /* تجاهل */
   }

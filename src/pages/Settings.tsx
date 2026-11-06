@@ -7,6 +7,15 @@ import {
   testKey,
 } from "../lib/gemini";
 import { field, ghostBtn, primaryBtn } from "../lib/ui";
+import {
+  dictationSupported,
+  loadVoice,
+  saveVoice,
+  speak,
+  ttsSupported,
+  useArabicVoice,
+} from "../lib/speech";
+import type { VoiceSettings } from "../lib/speech";
 
 export default function Settings() {
   const initial = loadAiSettings();
@@ -16,6 +25,20 @@ export default function Settings() {
   const [show, setShow] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const [voice, setVoice] = useState<VoiceSettings>(loadVoice);
+  const arabicVoice = useArabicVoice();
+  const updateVoice = (v: VoiceSettings) => {
+    setVoice(v);
+    saveVoice(v);
+  };
+  const tryVoice = () =>
+    speak("سيدي الرئيس، هذا اختبار لصوت الخصم. إن سمعتني بوضوح فالصوت يعمل على جهازك.", {
+      rate: voice.rate,
+      onProgress: () => {},
+      onEnd: () => {},
+      onError: (m) => setMessage({ ok: false, text: m }),
+    });
 
   const current = () => ({ key: key.trim(), model: model.trim() || DEFAULT_MODEL, consent });
 
@@ -36,8 +59,14 @@ export default function Settings() {
     setBusy(true);
     setMessage(null);
     try {
-      await testKey(current());
-      setMessage({ ok: true, text: "المفتاح والنموذج يعملان." });
+      const used = await testKey(current());
+      setMessage({
+        ok: true,
+        text:
+          used === current().model
+            ? "المفتاح والنموذج يعملان."
+            : `المفتاح يعمل، لكن النموذج «${current().model}» لم يستجب فاستُخدم البديل «${used}».`,
+      });
     } catch (e) {
       setMessage({ ok: false, text: e instanceof Error ? e.message : "فشل الاختبار." });
     } finally {
@@ -50,9 +79,55 @@ export default function Settings() {
       <header>
         <h1 className="font-display text-3xl font-bold">الإعدادات</h1>
         <p className="mt-2 text-muted">
-          التقييم الذاتي وتقييم الشريك يعملان دائمًا. أضف مفتاحك المجاني لفتح التقييم بالذكاء الاصطناعي.
+          أضف مفتاح Gemini المجاني ليولّد الموقع كلمات الخصم ويقيّم مناظرتك كاملة بالذكاء الاصطناعي. بدونه تظهر كلمات جاهزة فقط ولا يتوفر التقييم.
         </p>
       </header>
+
+      <section className="space-y-3 rounded-lg border border-line bg-card p-4 text-sm leading-7">
+        <h2 className="text-lg font-semibold">الصوت</h2>
+        <ul className="space-y-1">
+          <li>الإملاء الصوتي (كلامك إلى نص): {dictationSupported() ? "متاح ✓" : "غير مدعوم في هذا المتصفح ✗"}</li>
+          <li>
+            قراءة الخصم بصوت مسموع:{" "}
+            {!ttsSupported()
+              ? "غير مدعومة في هذا المتصفح ✗"
+              : arabicVoice === false
+                ? "متاحة لكن لا يوجد صوت عربي مثبّت على جهازك ⚠"
+                : "متاحة ✓"}
+          </li>
+        </ul>
+        {ttsSupported() && (
+          <>
+            <label className="flex items-start gap-3">
+              <input
+                type="checkbox"
+                checked={voice.autoSpeak}
+                onChange={(e) => updateVoice({ ...voice, autoSpeak: e.target.checked })}
+                className="mt-1 h-5 w-5"
+              />
+              <span>اقرأ كلمة الخصم بصوت مسموع تلقائيًا</span>
+            </label>
+            <div>
+              <label htmlFor="rate" className="font-semibold">
+                سرعة القراءة: {voice.rate.toFixed(1)}×
+              </label>
+              <input
+                id="rate"
+                type="range"
+                min={0.8}
+                max={2}
+                step={0.1}
+                value={voice.rate}
+                onChange={(e) => updateVoice({ ...voice, rate: Number(e.target.value) })}
+                className="mt-2 block w-full"
+              />
+            </div>
+            <button type="button" onClick={tryVoice} className={ghostBtn}>
+              🔊 جرّب الصوت
+            </button>
+          </>
+        )}
+      </section>
 
       <section className="rounded-lg border border-line bg-card p-4 text-sm leading-7">
         <p className="font-semibold">كيف تحصل على مفتاح</p>
@@ -114,7 +189,7 @@ export default function Settings() {
             className="mt-1 h-5 w-5"
           />
           <span>
-            أوافق أن نصوص كلماتي (للتقييم ولتوليد كلام الفريق الخصم) تُرسل إلى Google وتخضع لشروط المستوى المجاني، وقد تستخدمها Google لتحسين منتجاتها.
+            أوافق أن نص كلمتي يُرسل إلى Google ويخضع لشروط المستوى المجاني، وقد تستخدمه Google لتحسين منتجاتها.
           </span>
         </label>
 

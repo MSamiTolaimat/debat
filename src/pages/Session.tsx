@@ -5,8 +5,12 @@ import { loadAiSettings } from "../lib/gemini";
 import { bankSpeech, generateOpponentSpeech, pickVariant, variantCount } from "../lib/opponent";
 import { clearDraft, loadDraft, newId, saveDraft, saveSession } from "../lib/storage";
 import type { Draft } from "../lib/storage";
-import { field, ghostBtn, primaryBtn } from "../lib/ui";
+import { field, ghostBtn, iconBtn, primaryBtn } from "../lib/ui";
 import type { Side, Topic } from "../types";
+import Arena from "../components/Arena";
+import { MicButton, Ring, SpeakerCard, SpokenText, Stopwatch, ordinal } from "../components/DebateParts";
+import { RATE_STEPS, loadVoice, saveVoice, ttsSupported, useArabicVoice, useDictation, useSpeaker } from "../lib/speech";
+import type { VoiceSettings } from "../lib/speech";
 
 const MIN_CHARS = 30;
 
@@ -47,7 +51,7 @@ function Typewriter(props: { text: string; onFinish: () => void }) {
       finish.current();
       return;
     }
-    const id = setTimeout(() => setN((v) => Math.min(tokens.length, v + 2)), 90);
+    const id = setTimeout(() => setN((v) => Math.min(tokens.length, v + 4)), 55);
     return () => clearTimeout(id);
   }, [n, tokens.length]);
 
@@ -79,7 +83,6 @@ function SessionInner() {
     // مسودة قديمة بموقف يخالف المفروض حاليًا تُهمل (مثلًا بعد تغيير موقف الموضوع)
     return saved && (!fixed || saved.side === fixed) ? saved : freshDraft(topic);
   });
-  const [restored] = useState(() => initial.texts.some((t) => t.length > 0));
   const side = initial.side;
   const [step, setStep] = useState(initial.step);
   const [texts, setTexts] = useState(initial.texts);
@@ -93,14 +96,99 @@ function SessionInner() {
   const [typing, setTyping] = useState<number | null>(null);
   const [showManual, setShowManual] = useState(false);
   const requested = useRef<Set<number>>(new Set());
+  const [done, setDone] = useState<Record<string, boolean>>({});
+  const [drawer, setDrawer] = useState(false);
+  // الكلمة الختامية للخصم بعد كلمة الطالب الأخيرة
+  const [closing, setClosing] = useState(initial.closing ?? "");
+  const [closingMode, setClosingMode] = useState(false);
+  const [closingBusy, setClosingBusy] = useState(false);
+  const [closingTyping, setClosingTyping] = useState(false);
+  const [interlude, setInterlude] = useState("");
+  const speechRef = useRef<HTMLTextAreaElement>(null);
+  const captionRef = useRef<HTMLDivElement>(null);
+  const oppRef = useRef<HTMLDivElement>(null);
+  // الكتابة اليدوية خيار ثانوي: الكلمة تظهر كترجمة حية، والحقل يُفتح عند الطلب
+  const [editing, setEditing] = useState(false);
+  const [voice, setVoice] = useState<VoiceSettings>(loadVoice);
+  const speaker = useSpeaker();
+  const arabicVoice = useArabicVoice();
+  const canSpeak = ttsSupported();
+  const dictation = useDictation({
+    getText: () => texts[step],
+    setText: (v) => setTexts((t) => setAt(t, step, v)),
+    max: system.maxCharsPerSpeech,
+  });
+
+  const toggleVoice = () => {
+    const next = { ...voice, autoSpeak: !voice.autoSpeak };
+    setVoice(next);
+    saveVoice(next);
+    if (!next.autoSpeak) speaker.stop();
+  };
+
+  const cycleRate = () => {
+    const i = RATE_STEPS.findIndex((r) => Math.abs(r - voice.rate) < 0.05);
+    const next = { ...voice, rate: RATE_STEPS[(i + 1) % RATE_STEPS.length] };
+    setVoice(next);
+    saveVoice(next);
+    // إن كان الخصم يتكلم الآن، نعيد القراءة من البداية بالسرعة الجديدة
+    if (speaker.activeKey) {
+      const k = speaker.activeKey;
+      const t = k === "closing" ? closing : opponents[Number(k.slice(4))];
+      if (t) speaker.speakText(k, t, next.rate, speaker.reveal);
+    }
+  };
+
+  /** يعرض كلمة الخصم: بصوت مسموع مع ظهور النص، أو بالكتابة التدريجية إن كان الصوت متوقفًا */
+  function present(key: "closing" | number, text: string) {
+    if (voice.autoSpeak && canSpeak && !dictation.listening) {
+      setTyping(null);
+      setClosingTyping(false);
+      speaker.speakText(key === "closing" ? "closing" : `opp:${key}`, text, voice.rate, true);
+    } else if (key === "closing") {
+      setClosingTyping(true);
+    } else {
+      setTyping(key);
+    }
+  }
+
+  useEffect(() => {
+    if (dictation.listening && captionRef.current) captionRef.current.scrollTop = captionRef.current.scrollHeight;
+  }, [dictation.listening, texts, step]);
+
+  // أثناء قراءة الخصم يتبع النصُّ الصوتَ إلى الأسفل
+  useEffect(() => {
+    if (speaker.activeKey && speaker.reveal && oppRef.current) oppRef.current.scrollTop = oppRef.current.scrollHeight;
+  }, [speaker.activeKey, speaker.reveal, speaker.progress]);
+
+  useEffect(() => {
+    if (editing) speechRef.current?.focus();
+  }, [editing]);
+
+  useEffect(() => {
+    if (!interlude) return;
+    const id = setTimeout(() => setInterlude(""), 700);
+    return () => clearTimeout(id);
+  }, [interlude]);
+
+  useEffect(() => {
+    if (!drawer) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setDrawer(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [drawer]);
 
   const teamTurns = system.order.filter((t) => t.side === side);
   const turn = teamTurns[step];
+  // أدوار الخصم التي تأتي بعد كلمة الطالب الأخيرة (فيكتمل التحدي حتى نهايته)
+  const epilogue = system.order
+    .slice(system.order.findIndex((t) => t.id === teamTurns[teamTurns.length - 1].id) + 1)
+    .filter((t) => t.side !== side);
   const prev = previousTurn(turn.id);
 
   useEffect(() => {
-    if (topic && topicId) saveDraft(topicId, { side, step, texts, opponents, sources, variant });
-  }, [topic, topicId, side, step, texts, opponents, sources, variant]);
+    if (topic && topicId) saveDraft(topicId, { side, step, texts, opponents, sources, variant, closing });
+  }, [topic, topicId, side, step, texts, opponents, sources, variant, closing]);
 
   // عند الوصول إلى كلمة لها خصم سابق ولا نص له بعد، نجلب كلامه تلقائيًا
   useEffect(() => {
@@ -113,6 +201,7 @@ function SessionInner() {
   async function fetchOpponent(forStep: number, regenerate: boolean) {
     const opTurn = previousTurn(teamTurns[forStep].id);
     if (!topic || !opTurn) return;
+    speaker.stop();
     setBusyStep(forStep);
     setNotice("");
     setShowManual(false);
@@ -168,28 +257,71 @@ function SessionInner() {
     if (text) {
       setOpponents((o) => setAt(o, forStep, text));
       setSources((s) => setAt<Source>(s, forStep, source));
-      setTyping(forStep);
+      present(forStep, text);
       if (source === "bank") {
-        setNotice(
-          aiReady
-            ? `${note}وُضع نص جاهز من البنك بدلًا منه.`
-            : "لا يوجد مفتاح Gemini مفعّل، فهذا نص جاهز. أضف مفتاحك من الإعدادات ليتغير الكلام كل مرة ويردّ على ما تكتبه."
-        );
+        setNotice(note.trim());
       } else {
         setNotice("");
       }
     } else {
-      setNotice(
-        `${note}لا يوجد نص جاهز لهذا الموضوع. ألصق كلمة الخصم بنفسك، أو أضف مفتاح Gemini من الإعدادات ليولّدها الموقع.`
-      );
+      setNotice(`${note}لا توجد كلمة للخصم. ألصقها بنفسك أو أعد المحاولة.`.trim());
     }
     setBusyStep((b) => (b === forStep ? null : b));
+  }
+
+  async function fetchClosing(regenerate: boolean) {
+    const opTurn = epilogue[0];
+    if (!topic || !opTurn) return;
+    speaker.stop();
+    setClosingBusy(true);
+    setClosingTyping(false);
+    setNotice("");
+    let text = "";
+    let note = "";
+    const ai = loadAiSettings();
+    const aiReady = !!ai?.key && ai.consent;
+    if (aiReady && ai) {
+      try {
+        const known = new Map<string, string>();
+        teamTurns.forEach((t, j) => {
+          if (texts[j].trim()) known.set(t.id, texts[j].trim());
+          const p = previousTurn(t.id);
+          if (p && opponents[j].trim()) known.set(p.id, opponents[j].trim());
+        });
+        const idx = system.order.findIndex((t) => t.id === opTurn.id);
+        const transcript = system.order
+          .slice(0, idx)
+          .filter((t) => known.has(t.id))
+          .map((t) => ({ turn: t, text: known.get(t.id)! }));
+        text = await generateOpponentSpeech(ai, { topic, turn: opTurn, studentSide: side, transcript });
+      } catch (e) {
+        note = (e instanceof Error ? e.message : "تعذر توليد الكلمة الختامية.") + " ";
+      }
+    }
+    if (!text) {
+      const n = variantCount(topic, opTurn.side);
+      if (n > 0) {
+        const v = regenerate || variant === undefined || variant >= n ? pickVariant(n, regenerate ? variant : undefined) : variant;
+        text = bankSpeech(topic, opTurn.side, opTurn.speaker, v) ?? "";
+        if (text) setVariant(v);
+      }
+      if (text) {
+        setNotice(note.trim());
+      } else {
+        setNotice(note.trim());
+      }
+    }
+    if (text) {
+      setClosing(text);
+      present("closing", text);
+    }
+    setClosingBusy(false);
   }
 
   if (!topic) {
     return (
       <p>
-        الموضوع غير موجود. <Link to="/topics" className="underline">ارجع إلى المواضيع</Link>
+        الموضوع غير موجود. <Link to="/new" className="underline">ابدأ تدريبًا جديدًا</Link>
       </p>
     );
   }
@@ -204,14 +336,21 @@ function SessionInner() {
   const loading = busyStep === step;
 
   const go = (n: number) => {
+    dictation.stop();
+    speaker.stop();
+    setEditing(false);
     setStep(n);
     setTyping(null);
     setShowManual(false);
     setNotice("");
+    setDrawer(false);
+    const p = previousTurn(teamTurns[n].id);
+    setInterlude(`الجولة ${ordinal[n]}: ${p ? `${turnLabel(p)} يستعد…` : "أنت تفتح المناظرة"}`);
     window.scrollTo(0, 0);
   };
 
   const finish = () => {
+    speaker.stop();
     const teamId = newId();
     const createdAt = new Date().toISOString();
     teamTurns.forEach((t, i) =>
@@ -223,61 +362,215 @@ function SessionInner() {
         text: texts[i].trim(),
         opponentText: opponents[i].trim(),
         createdAt,
+        closingText: i === teamTurns.length - 1 && closing.trim() ? closing.trim() : undefined,
       })
     );
     clearDraft(topic.id);
-    nav(`/team/${teamId}`);
+    nav(`/team/${teamId}`, { state: { fresh: true } });
   };
 
+  const startClosing = () => {
+    dictation.stop();
+    if (epilogue.length === 0) return finish();
+    setClosingMode(true);
+    setNotice("");
+    window.scrollTo(0, 0);
+    if (!closing.trim()) void fetchClosing(false);
+  };
+
+  const backToEdit = () => {
+    speaker.stop();
+    setClosing(""); // نعيد توليدها لتردّ على النص بعد تعديله
+    setClosingMode(false);
+    setClosingTyping(false);
+    setNotice("");
+  };
+
+  const oppKey = `opp:${step}`;
+  const speakingOpp = speaker.activeKey === oppKey;
+  const speakingClosing = speaker.activeKey === "closing";
+
+  const oppBody = !prev ? null : loading ? (
+    <p role="status" className="animate-pulse text-muted">
+      {turnLabel(prev)} يستعد للكلام…
+    </p>
+  ) : oppText.trim() ? (
+    speakingOpp ? (
+      <SpokenText text={oppText} progress={speaker.progress} reveal={speaker.reveal} />
+    ) : typing === step ? (
+      <Typewriter key={oppText} text={oppText} onFinish={() => setTyping(null)} />
+    ) : (
+      <p className="whitespace-pre-wrap leading-8">{oppText}</p>
+    )
+  ) : (
+    <p className="text-sm text-muted">لا توجد كلمة للخصم بعد.</p>
+  );
+
+  const phase = loading
+    ? `${prev ? turnLabel(prev) : "الخصم"} يستعد…`
+    : speakingOpp || typing === step
+      ? "الخصم يتكلم"
+      : dictation.listening
+        ? "أنت تتكلم… كلامك يظهر أمامك"
+        : prev
+          ? "دورك! ردّ على الخصم"
+          : "دورك! افتح المناظرة";
+  const oppActive = loading || speakingOpp || typing === step;
+  const arenaSpeaking: "you" | "opp" | null = oppActive && !loading ? "opp" : dictation.listening ? "you" : null;
+  const showEditor = editing || !dictation.supported;
+
+  if (closingMode && epilogue[0]) {
+    const opTurn = epilogue[0];
+    const talking = (closingTyping || speakingClosing) && !closingBusy;
+    return (
+      <div className="space-y-5">
+        <header>
+          <p className="text-xs font-semibold text-flame-soft">{topic.category}</p>
+          <h1 className="font-display text-2xl font-bold leading-snug">{topic.title}</h1>
+        </header>
+
+        <Arena
+          userSide={side}
+          active="opp"
+          speaking={talking ? "opp" : null}
+          phase={closingBusy ? `${turnLabel(opTurn)} يستعد للختام…` : "الكلمة الختامية للخصم"}
+        />
+
+        <SpeakerCard
+          side={opTurn.side}
+          label={`${turnLabel(opTurn)} · الكلمة الختامية`}
+          speaking={talking}
+          busy={closingBusy}
+        >
+          <div className="max-h-[40dvh] overflow-y-auto text-lg [&_p]:leading-9">
+            {closingBusy ? (
+              <p role="status" className="animate-pulse text-muted">
+                {turnLabel(opTurn)} يستعد للختام…
+              </p>
+            ) : closing.trim() ? (
+              speakingClosing ? (
+                <SpokenText text={closing} progress={speaker.progress} reveal={speaker.reveal} />
+              ) : closingTyping ? (
+                <Typewriter key={closing} text={closing} onFinish={() => setClosingTyping(false)} />
+              ) : (
+                <p className="whitespace-pre-wrap">{closing}</p>
+              )
+            ) : (
+              <p className="text-sm text-muted">لا توجد كلمة ختامية.</p>
+            )}
+          </div>
+        </SpeakerCard>
+
+        {notice && !closingBusy && <p className="text-sm text-gold">{notice}</p>}
+
+        <div className="flex flex-wrap items-center gap-2">
+          {talking && (
+            <button
+              type="button"
+              aria-label="أظهر الكل"
+              title="أظهر الكل"
+              onClick={() => {
+                speaker.stop();
+                setClosingTyping(false);
+              }}
+              className={iconBtn}
+            >
+              ⏭
+            </button>
+          )}
+          {canSpeak && closing.trim() && !closingBusy && (
+            <button
+              type="button"
+              aria-label={speakingClosing ? "أوقف الصوت" : "استمع"}
+              title={speakingClosing ? "أوقف الصوت" : "استمع"}
+              onClick={() =>
+                speakingClosing ? speaker.stop() : speaker.speakText("closing", closing, voice.rate, false)
+              }
+              className={iconBtn}
+            >
+              {speakingClosing ? "⏹" : "▶"}
+            </button>
+          )}
+          <button type="button" aria-label="كلمة ختامية أخرى" title="كلمة ختامية أخرى" disabled={closingBusy} onClick={() => void fetchClosing(true)} className={iconBtn}>
+            🔄
+          </button>
+          <button type="button" disabled={closingBusy} onClick={backToEdit} className={iconBtn}>
+            ✏️ عدّل كلمتي
+          </button>
+        </div>
+
+        <button
+          type="button"
+          disabled={closingBusy || closingTyping || speakingClosing}
+          onClick={finish}
+          className={`${primaryBtn} shimmer w-full py-4 text-lg`}
+        >
+          اعرض التقييم الختامي ←
+        </button>
+      </div>
+    );
+  }
+
+  const ctaLabel = !canContinue
+    ? `تحدّث أو اكتب (${MIN_CHARS}+ حرفًا)`
+    : isLast
+      ? epilogue.length > 0
+        ? "أنهِ كلمتك واسمع الختام ←"
+        : "أنهِ وانتقل إلى التقييم ←"
+      : "الكلمة التالية ←";
+
   return (
-    <div className="space-y-8">
+    <div className="space-y-5 pb-24">
+      {interlude && (
+        <div role="status" className="fixed inset-0 z-40 flex items-center justify-center bg-night/95 p-8 text-center">
+          <p className="font-display text-3xl font-bold leading-snug text-flame-soft">{interlude}</p>
+        </div>
+      )}
+
+      <div className="sticky top-0 z-10 -mx-4 border-b border-line bg-night/95 px-4 py-3 backdrop-blur">
+        <div className="flex items-center gap-3">
+          <p className={`shrink-0 rounded-lg px-3 py-1 font-display text-lg font-bold ${style.solid}`}>
+            فريق {system.sides[side].label}
+          </p>
+          <ol className="flex flex-1 gap-1" aria-label="تقدمك">
+            {teamTurns.map((t, i) => (
+              <li
+                key={t.id}
+                aria-current={i === step ? "step" : undefined}
+                className={`flex-1 rounded-md border px-1 py-1 text-center text-xs ${
+                  i === step ? `${style.solid} font-semibold` : i < step ? "border-line bg-card" : "border-line text-muted"
+                }`}
+              >
+                {turnLabel(t)}
+              </li>
+            ))}
+          </ol>
+        </div>
+        <div
+          className="mt-2 h-1.5 overflow-hidden rounded-full bg-line"
+          role="progressbar"
+          aria-label="تقدمك في المناظرة"
+          aria-valuemin={0}
+          aria-valuemax={teamTurns.length}
+          aria-valuenow={step + (canContinue ? 1 : 0)}
+        >
+          <div
+            className="h-full rounded-full bg-flame transition-all duration-700 ease-out"
+            style={{ width: `${((step + (canContinue ? 1 : 0.15)) / teamTurns.length) * 100}%` }}
+          />
+        </div>
+      </div>
+
       <header>
-        <p className="text-sm text-muted">{topic.category}</p>
-        <h1 className="font-display text-3xl font-bold leading-snug">{topic.title}</h1>
-        <p className="mt-2 text-muted">{topic.brief}</p>
-        {restored && (
-          <p className="mt-3 text-sm text-gold">استرجعنا مسودتك المحفوظة من آخر مرة.</p>
-        )}
+        <p className="text-xs font-semibold text-flame-soft">{topic.category}</p>
+        <h1 className="font-display text-2xl font-bold leading-snug sm:text-3xl">{topic.title}</h1>
+        <details className="mt-1 text-sm text-muted">
+          <summary className="cursor-pointer active:text-flame-soft">عن القضية</summary>
+          <p className="mt-1">{topic.brief}</p>
+        </details>
       </header>
 
-      <section className={`rounded-lg p-4 ${style.solid}`}>
-        <p className="text-sm opacity-80">الموقف المفروض عليك في هذا التدريب</p>
-        <p className="font-display text-3xl font-bold">فريق {system.sides[side].label}</p>
-        <p className="mt-1 text-sm opacity-90">
-          تكتب كلمات فريقك الثلاث بالترتيب، ولا يمكن تغيير الموقف.
-        </p>
-      </section>
-
-      <ol className="flex gap-2" aria-label="تقدمك">
-        {teamTurns.map((t, i) => (
-          <li
-            key={t.id}
-            aria-current={i === step ? "step" : undefined}
-            className={`flex-1 rounded-lg border p-2 text-center text-sm ${
-              i === step
-                ? `${style.solid} font-semibold`
-                : i < step
-                  ? "border-line bg-card text-ink"
-                  : "border-line bg-card text-muted"
-            }`}
-          >
-            {turnLabel(t)}
-          </li>
-        ))}
-      </ol>
-
-      <section className={`rounded-lg border-s-4 bg-card p-4 ${style.border}`}>
-        <h2 className="font-semibold">
-          الكلمة {step + 1} من {teamTurns.length}: {turnLabel(turn)} ({role.title})
-        </h2>
-        <p className="mt-1 text-sm text-muted">{role.description}</p>
-        <ul className="mt-3 list-disc space-y-1 ps-5 text-sm">
-          {role.tasks.map((task) => (
-            <li key={task}>{task}</li>
-          ))}
-        </ul>
-        {role.todo && <p className="mt-3 text-sm text-gold">{role.todo}</p>}
-      </section>
+      <Arena userSide={side} active={oppActive ? "opp" : "you"} speaking={arenaSpeaking} phase={phase} />
 
       {step > 0 && (
         <section className="space-y-2">
@@ -292,115 +585,281 @@ function SessionInner() {
       )}
 
       {prev && (
-        <section
-          aria-busy={loading}
-          className={`rounded-lg border border-line border-s-4 bg-card p-4 ${sideStyle[prev.side].border}`}
-        >
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-lg font-semibold">كلمة {turnLabel(prev)} (الخصم السابق)</h2>
-            {oppText.trim() && oppSource && (
-              <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${sideStyle[prev.side].badge}`}>
-                {sourceLabel[oppSource]}
-              </span>
-            )}
-          </div>
-
-          <div className="mt-3 min-h-16">
-            {loading ? (
-              <p role="status" className="animate-pulse text-muted">
-                {turnLabel(prev)} يستعد للكلام…
-              </p>
-            ) : oppText.trim() ? (
-              typing === step ? (
-                <Typewriter key={oppText} text={oppText} onFinish={() => setTyping(null)} />
-              ) : (
-                <p className="whitespace-pre-wrap leading-8">{oppText}</p>
-              )
-            ) : (
-              <p className="text-sm text-muted">لا توجد كلمة للخصم بعد.</p>
-            )}
-          </div>
+        <div>
+          <SpeakerCard
+            side={prev.side}
+            label={`${turnLabel(prev)} · الخصم`}
+            speaking={(typing === step || speakingOpp) && !loading}
+            busy={loading}
+            badge={
+              oppText.trim() && oppSource ? (
+                <span className={`rounded-full px-2 py-0.5 font-semibold ${sideStyle[prev.side].badge}`}>
+                  {sourceLabel[oppSource]}
+                </span>
+              ) : null
+            }
+          >
+            <div ref={oppRef} className="max-h-[38dvh] overflow-y-auto text-lg [&_p]:leading-9">
+              {oppBody}
+            </div>
+          </SpeakerCard>
 
           {notice && !loading && <p className="mt-3 text-sm text-gold">{notice}</p>}
+          {speaker.error && <p className="mt-3 text-sm text-gold">{speaker.error}</p>}
+          {canSpeak && arabicVoice === false && <p className="mt-3 text-sm text-gold">لا يوجد صوت عربي على جهازك.</p>}
 
-          <div className="mt-4 flex flex-wrap gap-2">
-            {typing === step && !loading && (
-              <button type="button" onClick={() => setTyping(null)} className={ghostBtn}>
-                أظهر الكل
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {canSpeak && oppText.trim() && !loading && (
+              <button
+                type="button"
+                aria-label={speakingOpp ? "أوقف الصوت" : "استمع"}
+                title={speakingOpp ? "أوقف الصوت" : "استمع"}
+                onClick={() => (speakingOpp ? speaker.stop() : speaker.speakText(oppKey, oppText, voice.rate, false))}
+                className={iconBtn}
+              >
+                {speakingOpp ? "⏹" : "▶"}
+              </button>
+            )}
+            {(typing === step || speakingOpp) && !loading && (
+              <button
+                type="button"
+                aria-label="أظهر الكل"
+                title="أظهر الكل"
+                onClick={() => {
+                  speaker.stop();
+                  setTyping(null);
+                }}
+                className={iconBtn}
+              >
+                ⏭
+              </button>
+            )}
+            {canSpeak && voice.autoSpeak && (
+              <button type="button" onClick={cycleRate} className={iconBtn} aria-label="سرعة الكلام" title="سرعة الكلام">
+                ⚡ {voice.rate.toFixed(1)}×
+              </button>
+            )}
+            {canSpeak && (
+              <button
+                type="button"
+                onClick={toggleVoice}
+                aria-pressed={voice.autoSpeak}
+                aria-label="صوت الخصم"
+                title="صوت الخصم"
+                className={iconBtn}
+              >
+                {voice.autoSpeak ? "🔊" : "🔇"}
               </button>
             )}
             <button
               type="button"
+              aria-label={oppText.trim() ? "كلمة أخرى" : "حاول مرة أخرى"}
+              title={oppText.trim() ? "كلمة أخرى" : "حاول مرة أخرى"}
               disabled={loading}
               onClick={() => void fetchOpponent(step, true)}
-              className={ghostBtn}
+              className={iconBtn}
             >
-              {oppText.trim() ? "كلمة أخرى" : "حاول مرة أخرى"}
+              🔄
             </button>
             {oppText.trim() && !loading && (
-              <button type="button" onClick={() => setShowManual((v) => !v)} className={ghostBtn}>
-                {showManual ? "إخفاء الحقل" : "عدّل أو ألصق كلمة بنفسك"}
+              <button
+                type="button"
+                aria-label="عدّل أو ألصق كلمة الخصم"
+                title="عدّل أو ألصق كلمة الخصم"
+                aria-pressed={showManual}
+                onClick={() => setShowManual((v) => !v)}
+                className={iconBtn}
+              >
+                ✏️
               </button>
             )}
           </div>
 
           {(showManual || (!oppText.trim() && !loading)) && (
-            <div className="mt-4">
-              <label htmlFor="opp" className="text-sm font-semibold">
-                ألصق كلمة الخصم (اختياري)
-              </label>
-              <textarea
-                id="opp"
-                rows={5}
-                value={oppText}
-                onChange={(e) => {
-                  setOpponents((o) => setAt(o, step, e.target.value));
-                  setSources((s) => setAt<Source>(s, step, "manual"));
-                  setTyping(null);
-                }}
-                className={`${field} mt-2`}
-              />
-            </div>
-          )}
-        </section>
-      )}
-
-      <section>
-        <label htmlFor="speech" className="text-lg font-semibold">
-          اكتب كلمة {turnLabel(turn)}
-        </label>
-        <textarea
-          id="speech"
-          rows={12}
-          maxLength={system.maxCharsPerSpeech}
-          value={text}
-          onChange={(e) => setTexts((t) => setAt(t, step, e.target.value))}
-          className={`${field} mt-2`}
-        />
-        <p className="mt-1 text-sm text-muted">
-          {text.length} من {system.maxCharsPerSpeech} حرفًا
-        </p>
-
-        <div className="mt-4 flex flex-wrap gap-3">
-          {step > 0 && (
-            <button type="button" onClick={() => go(step - 1)} className={ghostBtn}>
-              الكلمة السابقة
-            </button>
-          )}
-          {isLast ? (
-            <button type="button" onClick={finish} disabled={!canContinue} className={primaryBtn}>
-              أنهِ وانتقل إلى ملخص الفريق
-            </button>
-          ) : (
-            <button type="button" onClick={() => go(step + 1)} disabled={!canContinue} className={primaryBtn}>
-              الكلمة التالية
-            </button>
+            <textarea
+              id="opp"
+              aria-label="كلمة الخصم"
+              placeholder="ألصق كلمة الخصم هنا"
+              rows={5}
+              value={oppText}
+              onChange={(e) => {
+                setOpponents((o) => setAt(o, step, e.target.value));
+                setSources((s) => setAt<Source>(s, step, "manual"));
+                setTyping(null);
+              }}
+              className={`${field} mt-3`}
+            />
           )}
         </div>
-        {!canContinue && (
-          <p className="mt-2 text-sm text-muted">اكتب {MIN_CHARS} حرفًا على الأقل لتنتقل.</p>
+      )}
+
+      <section className="space-y-5">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-lg font-bold">
+            دورك · {turnLabel(turn)} <span className="text-muted">({role.title})</span>
+          </h2>
+          <Stopwatch key={step} />
+        </div>
+
+        <div className="flex flex-wrap gap-2" role="group" aria-label="مهام دورك">
+          {role.tasks.map((task) => {
+            const k = `${step}:${task}`;
+            const on = !!done[k];
+            return (
+              <button
+                key={task}
+                type="button"
+                aria-pressed={on}
+                onClick={() => setDone((d) => ({ ...d, [k]: !d[k] }))}
+                className={`btn rounded-full border px-3 py-1 text-sm ${
+                  on ? `${style.solid} pop` : "border-line bg-card hover:border-flame/60 active:border-flame active:bg-flame/25"
+                }`}
+              >
+                {on ? "✓ " : ""}
+                {task}
+              </button>
+            );
+          })}
+        </div>
+        {role.tasks.every((task) => done[`${step}:${task}`]) && (
+          <p className="fade-up text-sm font-semibold text-pro">✓ أنجزتَ كل مهام دورك. أحسنت!</p>
         )}
+
+        {dictation.supported ? (
+          <MicButton
+            listening={dictation.listening}
+            onToggle={() => {
+              if (dictation.listening) {
+                dictation.stop();
+              } else {
+                speaker.stop(); // لا يلتقط الميكروفون صوت الخصم
+                setEditing(false);
+                dictation.start();
+              }
+            }}
+          />
+        ) : (
+          <p className="text-center text-sm text-gold">الإملاء الصوتي غير مدعوم في هذا المتصفح. جرّب Chrome.</p>
+        )}
+        {dictation.error && <p className="text-center text-sm text-gold">{dictation.error}</p>}
+
+        <div
+          className={`rounded-2xl border-2 bg-card p-4 transition-all duration-300 ${
+            dictation.listening ? "border-con shadow-[0_0_32px_rgba(251,113,133,.28)]" : "border-line"
+          }`}
+        >
+          {showEditor ? (
+            <textarea
+              id="speech"
+              ref={speechRef}
+              aria-label="كلمتك"
+              placeholder="اكتب كلمتك هنا"
+              rows={8}
+              maxLength={system.maxCharsPerSpeech}
+              value={text}
+              onChange={(e) => {
+                if (dictation.listening) dictation.stop(); // الكتابة اليدوية توقف الإملاء حتى لا يتعارضا
+                setTexts((t) => setAt(t, step, e.target.value));
+              }}
+              className={`${field} text-lg`}
+            />
+          ) : (
+            <div ref={captionRef} className="max-h-[36dvh] min-h-24 overflow-y-auto" aria-live="off">
+              {text ? (
+                <p className="whitespace-pre-wrap text-xl leading-9">
+                  {text}
+                  {dictation.listening && <span className="animate-pulse text-con">▍</span>}
+                </p>
+              ) : (
+                <p className="text-lg text-muted">كلمتك ستظهر هنا أثناء حديثك…</p>
+              )}
+            </div>
+          )}
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Ring value={text.length} max={system.maxCharsPerSpeech} ok={canContinue} />
+            <span className="text-sm text-muted">
+              {text.length} / {system.maxCharsPerSpeech}
+            </span>
+            <span className="flex-1" />
+            {prev && oppText.trim() && !loading && (
+              <button type="button" aria-label="كلمة الخصم" title="كلمة الخصم" onClick={() => setDrawer(true)} className={iconBtn}>
+                📜
+              </button>
+            )}
+            {dictation.supported && (
+              <button
+                type="button"
+                aria-pressed={editing}
+                onClick={() => {
+                  if (dictation.listening) dictation.stop();
+                  setEditing((v) => !v);
+                }}
+                className={iconBtn}
+              >
+                {editing ? "✔ تم" : "⌨️ اكتب"}
+              </button>
+            )}
+            {text && (
+              <button
+                type="button"
+                aria-label="امسح كلمتي"
+                title="امسح كلمتي"
+                onClick={() => {
+                  if (!window.confirm("مسح كلمتك الحالية؟")) return;
+                  dictation.stop();
+                  setTexts((t) => setAt(t, step, ""));
+                }}
+                className={iconBtn}
+              >
+                🗑
+              </button>
+            )}
+          </div>
+        </div>
       </section>
+
+      {/* شريط الإجراء الرئيسي ثابت أسفل الشاشة فوق التنقل */}
+      <div
+        className="pointer-events-none fixed inset-x-0 bottom-[calc(4rem+env(safe-area-inset-bottom))] z-10 px-4 pb-2 pt-8"
+        style={{ background: "linear-gradient(to top, var(--color-night) 55%, transparent)" }}
+      >
+        <div className="pointer-events-auto mx-auto flex max-w-3xl gap-2">
+          {step > 0 && (
+            <button type="button" aria-label="الكلمة السابقة" onClick={() => go(step - 1)} className={`${ghostBtn} px-4 text-lg`}>
+              →
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={isLast ? startClosing : () => go(step + 1)}
+            disabled={!canContinue}
+            className={`${primaryBtn} flex-1 py-4 text-lg ${canContinue ? "shimmer" : ""}`}
+          >
+            {ctaLabel}
+          </button>
+        </div>
+      </div>
+
+      {drawer && prev && (
+        <div className="fixed inset-0 z-30 flex flex-col justify-end bg-black/50" onClick={() => setDrawer(false)}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="كلمة الخصم"
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[70dvh] overflow-auto rounded-t-2xl border-t border-line bg-night-2 p-4 pb-8"
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="font-semibold">{turnLabel(prev)}</h2>
+              <button type="button" onClick={() => setDrawer(false)} className={ghostBtn}>
+                إغلاق
+              </button>
+            </div>
+            <div className="text-lg [&_p]:leading-9">{oppBody}</div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -2,7 +2,7 @@
   "status": "TODO: قيم مؤقتة مبنية على إجاباتك، وتحتاج مراجعة بدليل المسابقة (مدة الكلمات، ونموذج التحكيم).",
   "siteName": "مناظرة",
   "maxCharsPerSpeech": 3000,
-  "sideAssignment": "topic",
+  "sideAssignment": "random",
   "sides": {
     "pro": { "label": "المؤيد" },
     "con": { "label": "المعارض" }

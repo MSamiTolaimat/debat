@@ -9,19 +9,21 @@ export const rubric = rubricJson as unknown as Rubric;
 
 export const sideStyle: Record<
   Side,
-  { badge: string; border: string; solid: string; text: string }
+  { badge: string; border: string; solid: string; text: string; glow: string }
 > = {
   pro: {
     badge: "bg-pro-soft text-pro",
     border: "border-pro",
-    solid: "bg-pro text-white border-pro",
+    solid: "bg-pro text-night border-pro",
     text: "text-pro",
+    glow: "shadow-[0_0_32px_rgba(45,212,191,.28)]",
   },
   con: {
     badge: "bg-con-soft text-con",
     border: "border-con",
-    solid: "bg-con text-white border-con",
+    solid: "bg-con text-night border-con",
     text: "text-con",
+    glow: "shadow-[0_0_32px_rgba(251,113,133,.28)]",
   },
 };
 

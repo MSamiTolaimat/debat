@@ -60,13 +60,6 @@ export interface Rubric {
   criteria: Criterion[];
 }
 
-export interface Evaluation {
-  answers: Record<string, boolean>;
-  strongestPoint: string;
-  answeredIt: boolean | null;
-  finishedAt: string;
-}
-
 export interface Session {
   id: string;
   teamId?: string;
@@ -75,9 +68,9 @@ export interface Session {
   text: string;
   opponentText: string;
   createdAt: string;
-  evaluation?: Evaluation;
-  partnerEvaluation?: Evaluation;
   aiEvaluation?: AiEvaluation;
+  /** الكلمة الختامية التي قالها الخصم بعد كلمة الطالب الأخيرة (على آخر كلمة فقط) */
+  closingText?: string;
 }
 
 export interface AiWeakness {
@@ -93,4 +86,35 @@ export interface AiEvaluation {
   evidence: Record<string, { text: string; flag?: string }>;
   weaknesses: AiWeakness[];
   strength: { quote: string; why: string };
+}
+
+export interface ReviewWeakness {
+  quote: string;
+  problem: string;
+  /** ما كان ينبغي أن يقوله الطالب بدلًا من ذلك */
+  shouldSay: string;
+  /** هل وُجد الاقتباس حرفيًا في نص الطالب */
+  verified: boolean;
+}
+
+export interface SpeechReview {
+  turnId: string;
+  weaknesses: ReviewWeakness[];
+  strength: { quote: string; why: string; verified: boolean };
+}
+
+export interface MissedPoint {
+  opponentQuote: string;
+  shouldSay: string;
+  verified: boolean;
+}
+
+/** تقييم الذكاء الاصطناعي للمناظرة كلها في نهاية التحدي */
+export interface DebateReview {
+  model: string;
+  createdAt: string;
+  summary: string;
+  priorities: string[];
+  speeches: SpeechReview[];
+  missed: MissedPoint[];
 }
