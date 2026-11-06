@@ -1,4 +1,5 @@
 import { Link, useNavigate } from "react-router-dom";
+import { useState } from "react";
 import { loadAiSettings } from "../lib/gemini";
 import { loadSessions, topicsWithDraft } from "../lib/storage";
 
@@ -43,11 +44,16 @@ function Scales() {
 
 export default function Home() {
   const navigate = useNavigate();
+  const [showAiNotice, setShowAiNotice] = useState(false);
   const unfinished = topicsWithDraft()[0];
   // عدد المناظرات المكتملة (التدريبات القديمة بلا teamId تُعدّ كل جلسة منها واحدة)
   const done = new Set(loadSessions().map((s) => s.teamId ?? s.id)).size;
   const startTraining = () => {
-    navigate(loadAiSettings()?.key ? "/new" : "/settings");
+    if (loadAiSettings()?.key) {
+      navigate("/new");
+      return;
+    }
+    setShowAiNotice(true);
   };
 
   return (
@@ -118,6 +124,40 @@ export default function Home() {
           Sami Tolaimat · Telegram
         </a>
       </div>
+      {showAiNotice && (
+        <div
+          className="fixed inset-0 z-30 flex items-center justify-center bg-black/70 px-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="ai-notice-title"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-line bg-card p-5 text-start shadow-2xl">
+            <h2 id="ai-notice-title" className="font-display text-2xl font-bold text-flame-soft">
+              إعداد الذكاء الاصطناعي مطلوب
+            </h2>
+            <p className="mt-3 leading-7 text-white/85">
+              لبدء التدريب، انتقل إلى صفحة <strong>الإعدادات</strong>، ثم افتح قسم
+              <strong> الذكاء الاصطناعي</strong> وأنشئ مفتاح Gemini واحفظه واختبره.
+            </p>
+            <div className="mt-5 flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={() => navigate("/settings")}
+                className="btn rounded-lg bg-flame px-5 py-3 font-bold text-night hover:bg-[#ff8a3d] active:bg-flame-deep active:text-white"
+              >
+                الانتقال إلى الإعدادات
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowAiNotice(false)}
+                className="btn rounded-lg border border-line bg-night px-5 py-3 font-semibold hover:border-flame/60 active:bg-flame/25"
+              >
+                لاحقًا
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

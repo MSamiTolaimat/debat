@@ -138,7 +138,7 @@ function Pill(props: { ok: boolean; text: string }) {
 }
 
 export default function Settings() {
-  const [openSection, setOpenSection] = useState("s-train");
+  const [openSection, setOpenSection] = useState("");
   const initial = loadAiSettings();
   const [key, setKey] = useState(initial?.key ?? "");
   const [model, setModel] = useState(initial?.model ?? DEFAULT_MODEL);
