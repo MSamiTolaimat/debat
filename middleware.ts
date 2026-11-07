@@ -121,7 +121,7 @@ function loginPage(error: string, status: number): Response {
 <style>
 *{box-sizing:border-box}body{margin:0;min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:20px;background:#0e1730;color:#f4f6fb;font-family:system-ui,"Segoe UI",Tahoma,sans-serif}
 form{width:100%;max-width:360px;background:#17234a;border:1px solid #2c3a66;border-radius:20px;padding:24px}
-h1{margin:0 0 4px;font-size:28px;color:#fdba74}p{margin:0 0 16px;color:#a9b4cc;font-size:14px}
+h1{margin:0 0 4px;font-size:28px;color:#fdba74;text-align:center}.intro{text-align:center}p{margin:0 0 16px;color:#a9b4cc;font-size:14px}
 label{display:block;margin:12px 0 4px;font-size:14px}
 input{width:100%;min-height:48px;padding:0 12px;font:inherit;font-size:16px;color:#f4f6fb;background:#0e1730;border:1px solid #2c3a66;border-radius:12px}
 input:focus{outline:2px solid #f97316;border-color:#f97316}
@@ -130,7 +130,7 @@ button{margin-top:20px;width:100%;min-height:52px;border:0;border-radius:14px;ba
 a{color:#fdba74}
 </style></head><body>
 <form method="post" autocomplete="on">
-<h1>مناظرة</h1><p>سجّل دخولك لمتابعة التدريب.</p>
+<h1>مناظرة</h1><p class="intro">سجّل دخولك لمتابعة التدريب.</p>
 ${error ? `<div class="err" role="alert">${esc(error)}</div>` : ""}
 <label for="u">اسم المستخدم</label>
 <input id="u" name="username" autocomplete="username" autocapitalize="none" autocorrect="off" required>

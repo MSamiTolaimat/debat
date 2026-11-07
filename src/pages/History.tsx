@@ -16,7 +16,7 @@ export default function History() {
 
   if (sessions.length === 0) {
     return (
-      <div>
+      <div className="text-center">
         <h1 className="font-display text-3xl font-bold">السجل</h1>
         <p className="mt-3 text-muted">لا توجد تدريبات بعد. أنهِ تدريبًا واحدًا ليظهر هنا.</p>
         <Link to="/new" className={`${primaryBtn} mt-5`}>ابدأ تدريبًا</Link>
@@ -44,7 +44,7 @@ export default function History() {
   });
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 text-center">
       <h1 className="font-display text-3xl font-bold">السجل</h1>
       <ul className="space-y-3">
         {entries.map((e, i) => (
